@@ -2,10 +2,13 @@ import { AppModule } from './app.module'
 import { ConfigService } from '@nestjs/config'
 import { NestFactory } from '@nestjs/core'
 import { ValidationPipe } from '@nestjs/common'
+import { json, urlencoded } from 'express'
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule)
   const config = app.get(ConfigService)
+  app.use(json({ limit: '20mb' }))
+  app.use(urlencoded({ limit: '20mb', extended: true }))
   const corsOrigin = config
     .get('CORS_ORIGIN', '*')
     .split(',')

@@ -5,7 +5,15 @@ import { QuestionQuality, TruthGuess } from '../common/enums'
 import { SoupsService } from '../soups/soups.service'
 import { User } from '../users/user.entity'
 import { UsersService } from '../users/users.service'
-import { CreateQuestionDto, CreateRoomDto, UpdateQuestionDto, UpdateRoomDto } from './dto'
+import {
+  CreateQuestionDto,
+  CreateRoomDto,
+  RateSoupDto,
+  SwitchSoupDto,
+  TransferHostDto,
+  UpdateQuestionDto,
+  UpdateRoomDto,
+} from './dto'
 import { Question } from './question.entity'
 import { Room } from './room.entity'
 import { RoomsGateway } from './rooms.gateway'
@@ -21,8 +29,7 @@ export class RoomsService {
   ) {}
 
   async create(dto: CreateRoomDto, host: User) {
-    const source = dto.soupId ? await this.soupsService.findById(dto.soupId) : null
-    if (dto.soupId && !source) throw new NotFoundException('汤面不存在')
+    const source = dto.soupId ? await this.soupsService.findOwnedById(dto.soupId, host) : null
 
     const room = await this.rooms.save(
       this.rooms.create({
@@ -32,6 +39,8 @@ export class RoomsService {
         answer: dto.answer ?? source?.answer ?? '主持人正在编辑汤底。',
         host,
         questions: [],
+        soupHistory: [],
+        ratingMap: {},
       }),
     )
     return this.findByCode(room.code)
@@ -50,10 +59,91 @@ export class RoomsService {
   async update(code: string, dto: UpdateRoomDto, user: User) {
     const room = await this.findEntityByCode(code)
     this.assertHost(room, user)
-    Object.assign(room, dto)
+    const { ambience, backgroundImageDataUrl, musicDataUrl, musicName, musicVolume, ...roomPatch } = dto
+    Object.assign(room, roomPatch)
+    if (
+      ambience ||
+      typeof backgroundImageDataUrl === 'string' ||
+      typeof musicDataUrl === 'string' ||
+      typeof musicName === 'string' ||
+      typeof musicVolume === 'number'
+    ) {
+      room.ambience = {
+        ...(room.ambience ?? {}),
+        ...(ambience ?? {}),
+        ...(typeof backgroundImageDataUrl === 'string' ? { backgroundImageDataUrl } : {}),
+        ...(typeof musicDataUrl === 'string' ? { musicDataUrl } : {}),
+        ...(typeof musicName === 'string' ? { musicName } : {}),
+        ...(typeof musicVolume === 'number' ? { musicVolume } : {}),
+      }
+    }
     const saved = await this.rooms.save(room)
     const next = await this.findByCode(saved.code)
     this.gateway.emitRoom(next)
+    return next
+  }
+
+  async switchSoup(code: string, dto: SwitchSoupDto, user: User) {
+    const room = await this.findEntityByCode(code)
+    this.assertHost(room, user)
+    const soup = await this.soupsService.findOwnedById(dto.soupId, user)
+
+    await this.questions
+      .createQueryBuilder()
+      .delete()
+      .from(Question)
+      .where('roomId = :roomId', { roomId: room.id })
+      .execute()
+    room.title = soup.title
+    room.surface = soup.surface
+    room.answer = soup.answer
+    room.canvasDataUrl = ''
+    room.solved = false
+    room.revealed = false
+    room.settlement = null
+    room.ratingMap = {}
+    room.soupHistory = this.getRevealedSoupHistory(room.soupHistory ?? [])
+    await this.rooms.save(room)
+
+    const next = await this.findByCode(code)
+    this.gateway.emitRoom(next)
+    this.gateway.server.to(room.code).emit('room-reset', {
+      roomCode: room.code,
+      room: next,
+      message: `主持人切换了海龟汤：${soup.title}`,
+      at: new Date().toISOString(),
+    })
+    return next
+  }
+
+  async transferHost(code: string, dto: TransferHostDto, user: User) {
+    const room = await this.findEntityByCode(code)
+    this.assertHost(room, user)
+    if (dto.userId === user.id) throw new ForbiddenException('不能把主持人转让给自己')
+    if (!this.gateway.isUserOnline(room.code, dto.userId)) {
+      throw new ForbiddenException('只能任命当前房间内在线用户为主持人')
+    }
+
+    const nextHost = await this.usersService.findById(dto.userId)
+    if (!nextHost) throw new NotFoundException('用户不存在')
+    room.host = nextHost
+    await this.rooms.save(room)
+
+    const next = await this.findByCode(code)
+    this.gateway.emitRoom(next)
+    this.gateway.server.to(room.code).emit('room-host-transferred', {
+      roomCode: room.code,
+      host: {
+        id: nextHost.id,
+        username: nextHost.username,
+        displayName: nextHost.displayName,
+        avatarDataUrl: nextHost.avatarDataUrl,
+        points: nextHost.points,
+        rankTitle: nextHost.rankTitle,
+      },
+      message: `${user.displayName} 已将主持人交给 ${nextHost.displayName}`,
+      at: new Date().toISOString(),
+    })
     return next
   }
 
@@ -123,11 +213,25 @@ export class RoomsService {
     entity.revealed = true
     entity.solved = true
     entity.settlement = settlement
+    entity.soupHistory = this.recordCurrentSoupRevealed(entity.soupHistory ?? [], entity, user)
     await this.rooms.save(entity)
     const next = await this.findByCode(code)
     this.gateway.emitRoom(next)
     this.gateway.server.to(room.code).emit('room-revealed', settlement)
     return settlement
+  }
+
+  async rateSoup(code: string, dto: RateSoupDto, user: User) {
+    const room = await this.findEntityByCode(code)
+    if (!room.revealed) throw new ForbiddenException('揭秘后才能评分')
+    if (room.host.id === user.id) throw new ForbiddenException('主持人不能给自己的汤面评分')
+    const rating = Math.min(5, Math.max(1, Math.round(dto.rating)))
+    room.ratingMap = { ...(room.ratingMap ?? {}), [user.id]: rating }
+    room.soupHistory = this.applyCurrentSoupRating(room.soupHistory ?? [], room.ratingMap)
+    await this.rooms.save(room)
+    const next = await this.findByCode(code)
+    this.gateway.emitRoom(next)
+    return next
   }
 
   async removeQuestion(code: string, questionId: string, user: User) {
@@ -149,6 +253,49 @@ export class RoomsService {
     if (room.host.id !== user.id) throw new ForbiddenException('只有主持人可以操作')
   }
 
+  private createSoupSnapshot(title: string, surface: string, answer: string, host: User) {
+    return {
+      id: crypto.randomUUID(),
+      title,
+      surface,
+      answer,
+      host: {
+        id: host.id,
+        username: host.username,
+        displayName: host.displayName,
+      },
+      startedAt: new Date().toISOString(),
+      ratingAverage: 0,
+      ratingCount: 0,
+    }
+  }
+
+  private getRevealedSoupHistory(history: NonNullable<Room['soupHistory']>) {
+    return history.filter((item) => item.revealedAt)
+  }
+
+  private recordCurrentSoupRevealed(history: NonNullable<Room['soupHistory']>, room: Room, host: User) {
+    const revealedHistory = this.getRevealedSoupHistory(history)
+    return [
+      ...revealedHistory,
+      {
+        ...this.createSoupSnapshot(room.title, room.surface, room.answer, host),
+        revealedAt: new Date().toISOString(),
+      },
+    ]
+  }
+
+  private applyCurrentSoupRating(history: NonNullable<Room['soupHistory']>, ratingMap: Record<string, number>) {
+    const ratings = Object.values(ratingMap)
+    const ratingCount = ratings.length
+    const ratingAverage = ratingCount
+      ? Math.round((ratings.reduce((sum, rating) => sum + rating, 0) / ratingCount) * 10) / 10
+      : 0
+    return history.map((item, index) =>
+      index === history.length - 1 ? { ...item, ratingAverage, ratingCount } : item,
+    )
+  }
+
   private async generateRoomCode() {
     for (let i = 0; i < 10; i += 1) {
       const code = Math.random().toString(36).slice(2, 8).toUpperCase()
@@ -159,6 +306,14 @@ export class RoomsService {
   }
 
   private normalizeRoom(room: Room) {
+    room.soupHistory = this.getRevealedSoupHistory(room.soupHistory ?? []).map((item) => ({
+        ...item,
+        host: item.host ?? {
+          id: room.host.id,
+          username: room.host.username,
+          displayName: room.host.displayName,
+        },
+      }))
     room.questions = [...(room.questions ?? [])].sort(
       (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
     )

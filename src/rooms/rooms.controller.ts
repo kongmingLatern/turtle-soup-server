@@ -2,7 +2,15 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@n
 import { CurrentUser } from '../auth/current-user.decorator'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { User } from '../users/user.entity'
-import { CreateQuestionDto, CreateRoomDto, UpdateQuestionDto, UpdateRoomDto } from './dto'
+import {
+  CreateQuestionDto,
+  CreateRoomDto,
+  RateSoupDto,
+  SwitchSoupDto,
+  TransferHostDto,
+  UpdateQuestionDto,
+  UpdateRoomDto,
+} from './dto'
 import { RoomsService } from './rooms.service'
 
 @Controller('rooms')
@@ -24,6 +32,22 @@ export class RoomsController {
   @UseGuards(JwtAuthGuard)
   update(@Param('code') code: string, @Body() dto: UpdateRoomDto, @CurrentUser() user: User) {
     return this.roomsService.update(code, dto, user)
+  }
+
+  @Post(':code/switch-soup')
+  @UseGuards(JwtAuthGuard)
+  switchSoup(@Param('code') code: string, @Body() dto: SwitchSoupDto, @CurrentUser() user: User) {
+    return this.roomsService.switchSoup(code, dto, user)
+  }
+
+  @Post(':code/transfer-host')
+  @UseGuards(JwtAuthGuard)
+  transferHost(
+    @Param('code') code: string,
+    @Body() dto: TransferHostDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.roomsService.transferHost(code, dto, user)
   }
 
   @Post(':code/questions')
@@ -61,5 +85,11 @@ export class RoomsController {
   @UseGuards(JwtAuthGuard)
   reveal(@Param('code') code: string, @CurrentUser() user: User) {
     return this.roomsService.reveal(code, user)
+  }
+
+  @Post(':code/rating')
+  @UseGuards(JwtAuthGuard)
+  rateSoup(@Param('code') code: string, @Body() dto: RateSoupDto, @CurrentUser() user: User) {
+    return this.roomsService.rateSoup(code, dto, user)
   }
 }

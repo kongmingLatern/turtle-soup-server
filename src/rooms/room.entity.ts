@@ -30,6 +30,15 @@ export class Room {
   @Column('text', { default: '' })
   canvasDataUrl: string
 
+  @Column('simple-json', { nullable: true })
+  ambience?: {
+    backgroundImageDataUrl?: string
+    backgroundPreset?: 'light' | 'mist' | 'archive' | 'noir'
+    musicDataUrl?: string
+    musicName?: string
+    musicVolume?: number
+  } | null
+
   @Column({ default: false })
   solved: boolean
 
@@ -37,7 +46,27 @@ export class Room {
   revealed: boolean
 
   @Column('simple-json', { nullable: true })
-  settlement?: unknown
+  settlement?: unknown | null
+
+  @Column('simple-json', { nullable: true })
+  soupHistory?: Array<{
+    id: string
+    title: string
+    surface: string
+    answer: string
+    host?: {
+      id: string
+      displayName: string
+      username: string
+    }
+    startedAt: string
+    revealedAt?: string
+    ratingAverage?: number
+    ratingCount?: number
+  }> | null
+
+  @Column('simple-json', { nullable: true })
+  ratingMap?: Record<string, number> | null
 
   @ManyToOne(() => User, (user) => user.hostedRooms, { eager: true, onDelete: 'CASCADE' })
   host: User

@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsOptional, IsString, Length } from 'class-validator'
+import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, Length } from 'class-validator'
 import { QuestionQuality, TruthGuess, Verdict } from '../common/enums'
 
 export class CreateRoomDto {
@@ -43,8 +43,49 @@ export class UpdateRoomDto {
   canvasDataUrl?: string
 
   @IsOptional()
+  @IsObject()
+  ambience?: {
+    backgroundImageDataUrl?: string
+    backgroundPreset?: 'light' | 'mist' | 'archive' | 'noir'
+    musicDataUrl?: string
+    musicName?: string
+    musicVolume?: number
+  }
+
+  @IsOptional()
+  @IsString()
+  backgroundImageDataUrl?: string
+
+  @IsOptional()
+  @IsString()
+  musicDataUrl?: string
+
+  @IsOptional()
+  @IsString()
+  musicName?: string
+
+  @IsOptional()
+  @IsNumber()
+  musicVolume?: number
+
+  @IsOptional()
   @IsBoolean()
   solved?: boolean
+}
+
+export class SwitchSoupDto {
+  @IsString()
+  soupId: string
+}
+
+export class TransferHostDto {
+  @IsString()
+  userId: string
+}
+
+export class RateSoupDto {
+  @IsNumber()
+  rating: number
 }
 
 export class CreateQuestionDto {

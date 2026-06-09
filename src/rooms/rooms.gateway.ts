@@ -120,6 +120,10 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to(room.code).emit('room-updated', room)
   }
 
+  isUserOnline(roomCode: string, userId: string) {
+    return [...(this.members.get(roomCode)?.values() ?? [])].some((member) => member.userId === userId)
+  }
+
   private removeMember(socket: Socket) {
     const roomCode = this.socketRooms.get(socket.id)
     if (!roomCode) return

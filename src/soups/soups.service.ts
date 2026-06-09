@@ -1,27 +1,32 @@
-import { Injectable, OnModuleInit } from '@nestjs/common'
+import { ForbiddenException, Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import { User } from '../users/user.entity'
-import { builtinSoups } from './builtin-soups'
-import { CreateSoupDto } from './dto'
+import { CreateSoupDto, UpdateSoupDto } from './dto'
 import { Soup } from './soup.entity'
 
 @Injectable()
-export class SoupsService implements OnModuleInit {
+export class SoupsService {
   constructor(@InjectRepository(Soup) private readonly soups: Repository<Soup>) {}
 
-  async onModuleInit() {
-    const count = await this.soups.count({ where: { isBuiltin: true } })
-    if (count > 0) return
-    await this.soups.save(builtinSoups.map((soup) => this.soups.create({ ...soup, isBuiltin: true })))
-  }
-
-  list() {
-    return this.soups.find({ order: { isBuiltin: 'DESC', createdAt: 'DESC' } })
+  list(user: User) {
+    return this.soups.find({
+      where: { isBuiltin: false, creator: { id: user.id } },
+      relations: { creator: true },
+      order: { createdAt: 'DESC' },
+    })
   }
 
   findById(id: string) {
-    return this.soups.findOne({ where: { id } })
+    return this.soups.findOne({ where: { id }, relations: { creator: true } })
+  }
+
+  async findOwnedById(id: string, user: User) {
+    const soup = await this.findById(id)
+    if (!soup || soup.isBuiltin || soup.creator?.id !== user.id) {
+      throw new ForbiddenException('只能使用自己创建的汤面')
+    }
+    return soup
   }
 
   create(dto: CreateSoupDto, creator: User) {
@@ -34,5 +39,17 @@ export class SoupsService implements OnModuleInit {
         creator,
       }),
     )
+  }
+
+  async update(id: string, dto: UpdateSoupDto, user: User) {
+    const soup = await this.findOwnedById(id, user)
+    Object.assign(soup, dto)
+    return this.soups.save(soup)
+  }
+
+  async remove(id: string, user: User) {
+    const soup = await this.findOwnedById(id, user)
+    await this.soups.delete({ id: soup.id })
+    return { deleted: true }
   }
 }

@@ -22,3 +22,29 @@ export class CreateSoupDto {
   @IsIn(['easy', 'medium', 'hard'])
   difficulty?: 'easy' | 'medium' | 'hard'
 }
+
+export class UpdateSoupDto {
+  @IsOptional()
+  @IsString()
+  @Length(2, 60)
+  title?: string
+
+  @IsOptional()
+  @IsString()
+  @Length(8, 2000)
+  surface?: string
+
+  @IsOptional()
+  @IsString()
+  @Length(8, 4000)
+  answer?: string
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 20)
+  category?: string
+
+  @IsOptional()
+  @IsIn(['easy', 'medium', 'hard'])
+  difficulty?: 'easy' | 'medium' | 'hard'
+}
