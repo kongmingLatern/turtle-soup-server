@@ -6,6 +6,7 @@ import {
   CreateQuestionDto,
   CreateRoomDto,
   RateSoupDto,
+  SelectMvpDto,
   SwitchSoupDto,
   TransferHostDto,
   UpdateQuestionDto,
@@ -91,5 +92,11 @@ export class RoomsController {
   @UseGuards(JwtAuthGuard)
   rateSoup(@Param('code') code: string, @Body() dto: RateSoupDto, @CurrentUser() user: User) {
     return this.roomsService.rateSoup(code, dto, user)
+  }
+
+  @Post(':code/mvp')
+  @UseGuards(JwtAuthGuard)
+  selectMvp(@Param('code') code: string, @Body() dto: SelectMvpDto, @CurrentUser() user: User) {
+    return this.roomsService.selectMvp(code, dto, user)
   }
 }

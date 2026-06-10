@@ -88,6 +88,11 @@ export class RateSoupDto {
   rating: number
 }
 
+export class SelectMvpDto {
+  @IsString()
+  userId: string
+}
+
 export class CreateQuestionDto {
   @IsString()
   @Length(1, 500)

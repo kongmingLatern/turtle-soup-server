@@ -49,6 +49,37 @@ export class Room {
   settlement?: unknown | null
 
   @Column('simple-json', { nullable: true })
+  mvp?: {
+    selectedAt: string
+    user: {
+      id: string
+      username: string
+      displayName: string
+      avatarDataUrl?: string
+      points?: number
+      rankTitle?: string
+    }
+    importantQuestions: Array<{
+      id: string
+      text: string
+      verdict?: string | null
+      important: boolean
+      quality?: string
+      truthGuess?: string
+      firstCoreClue?: boolean
+      firstMainLogic?: boolean
+      firstFullSolve?: boolean
+      author: {
+        id: string
+        username: string
+        displayName: string
+        avatarDataUrl?: string
+      }
+      createdAt: string
+    }>
+  } | null
+
+  @Column('simple-json', { nullable: true })
   soupHistory?: Array<{
     id: string
     title: string
@@ -58,7 +89,9 @@ export class Room {
       id: string
       displayName: string
       username: string
+      avatarDataUrl?: string
     }
+    mvp?: Room['mvp'] | null
     startedAt: string
     revealedAt?: string
     ratingAverage?: number

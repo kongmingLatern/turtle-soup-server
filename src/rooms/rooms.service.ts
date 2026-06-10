@@ -9,6 +9,7 @@ import {
   CreateQuestionDto,
   CreateRoomDto,
   RateSoupDto,
+  SelectMvpDto,
   SwitchSoupDto,
   TransferHostDto,
   UpdateQuestionDto,
@@ -107,6 +108,7 @@ export class RoomsService {
     room.solved = false
     room.revealed = false
     room.settlement = null
+    room.mvp = null
     room.ratingMap = {}
     room.soupHistory = this.getRevealedSoupHistory(room.soupHistory ?? [])
     room.questions = []
@@ -156,10 +158,14 @@ export class RoomsService {
 
   async addQuestion(code: string, dto: CreateQuestionDto, user: User) {
     const room = await this.findEntityByCode(code)
-    await this.questions.save(this.questions.create({ text: dto.text, author: user, room }))
-    const next = await this.findByCode(code)
-    this.gateway.emitRoom(next)
-    return next
+    const saved = await this.questions.save(this.questions.create({ text: dto.text, author: user, room }))
+    const question = await this.questions.findOne({ where: { id: saved.id } })
+    if (!question) throw new NotFoundException('问题不存在')
+    this.gateway.server.to(room.code).emit('question-added', {
+      roomCode: room.code,
+      question,
+    })
+    return question
   }
 
   async updateQuestion(code: string, questionId: string, dto: UpdateQuestionDto, user: User) {
@@ -241,6 +247,64 @@ export class RoomsService {
     return next
   }
 
+  async selectMvp(code: string, dto: SelectMvpDto, user: User) {
+    const room = await this.findByCode(code)
+    this.assertHost(room, user)
+    if (!room.revealed) throw new ForbiddenException('揭秘后才能评定 MVP')
+    if (room.mvp) throw new ForbiddenException('本轮 MVP 已评定')
+    if (dto.userId === room.host.id) throw new ForbiddenException('主持人不能成为 MVP')
+
+    const target = await this.usersService.findById(dto.userId)
+    if (!target) throw new NotFoundException('用户不存在')
+
+    const settlementEntries = (room.settlement as { entries?: Array<{ user: { id: string } }> } | null)?.entries ?? []
+    const participated = room.questions.some((question) => question.author.id === dto.userId)
+      || settlementEntries.some((entry) => entry.user.id === dto.userId)
+    if (!participated) throw new ForbiddenException('只能选择本轮参与玩家')
+
+    const mvp = {
+      selectedAt: new Date().toISOString(),
+      user: {
+        id: target.id,
+        username: target.username,
+        displayName: target.displayName,
+        avatarDataUrl: target.avatarDataUrl ?? '',
+        points: target.points ?? 0,
+        rankTitle: target.rankTitle ?? '路人甲',
+      },
+      importantQuestions: [...(room.questions ?? [])]
+        .filter((question) => this.hasImportantSignal(question) && question.author.id === dto.userId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .map((question) => ({
+          id: question.id,
+          text: question.text,
+          verdict: question.verdict ?? null,
+          important: Boolean(question.important),
+          quality: question.quality,
+          truthGuess: question.truthGuess,
+          firstCoreClue: Boolean(question.firstCoreClue),
+          firstMainLogic: Boolean(question.firstMainLogic),
+          firstFullSolve: Boolean(question.firstFullSolve),
+          author: {
+            id: question.author.id,
+            username: question.author.username,
+            displayName: question.author.displayName,
+            avatarDataUrl: question.author.avatarDataUrl ?? '',
+          },
+          createdAt: question.createdAt.toISOString(),
+        })),
+    }
+
+    const entity = await this.findEntityByCode(code)
+    entity.mvp = mvp
+    entity.soupHistory = this.applyCurrentSoupMvp(entity.soupHistory ?? [], mvp)
+    await this.rooms.save(entity)
+    const next = await this.findByCode(code)
+    this.gateway.emitRoom(next)
+    this.gateway.server.to(room.code).emit('room-mvp-selected', mvp)
+    return mvp
+  }
+
   async removeQuestion(code: string, questionId: string, user: User) {
     const room = await this.findEntityByCode(code)
     this.assertHost(room, user)
@@ -271,6 +335,7 @@ export class RoomsService {
         id: host.id,
         username: host.username,
         displayName: host.displayName,
+        avatarDataUrl: host.avatarDataUrl ?? '',
       },
       startedAt: new Date().toISOString(),
       ratingAverage: 0,
@@ -304,6 +369,23 @@ export class RoomsService {
     )
   }
 
+  private applyCurrentSoupMvp(history: NonNullable<Room['soupHistory']>, mvp: NonNullable<Room['mvp']>) {
+    return history.map((item, index) =>
+      index === history.length - 1 ? { ...item, mvp } : item,
+    )
+  }
+
+  private hasImportantSignal(question: Question) {
+    return Boolean(
+      question.important ||
+        question.quality !== QuestionQuality.None ||
+        question.truthGuess !== TruthGuess.None ||
+        question.firstCoreClue ||
+        question.firstMainLogic ||
+        question.firstFullSolve,
+    )
+  }
+
   private async generateRoomCode() {
     for (let i = 0; i < 10; i += 1) {
       const code = Math.random().toString(36).slice(2, 8).toUpperCase()
@@ -320,6 +402,7 @@ export class RoomsService {
           id: room.host.id,
           username: room.host.username,
           displayName: room.host.displayName,
+          avatarDataUrl: room.host.avatarDataUrl ?? '',
         },
       }))
     room.questions = [...(room.questions ?? [])].sort(
