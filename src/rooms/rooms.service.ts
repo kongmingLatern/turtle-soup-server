@@ -18,6 +18,12 @@ import { Question } from './question.entity'
 import { Room } from './room.entity'
 import { RoomsGateway } from './rooms.gateway'
 
+import { webcrypto } from 'node:crypto';
+
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
 @Injectable()
 export class RoomsService {
   constructor(
@@ -103,6 +109,7 @@ export class RoomsService {
     room.settlement = null
     room.ratingMap = {}
     room.soupHistory = this.getRevealedSoupHistory(room.soupHistory ?? [])
+    room.questions = []
     await this.rooms.save(room)
 
     const next = await this.findByCode(code)
@@ -254,6 +261,7 @@ export class RoomsService {
   }
 
   private createSoupSnapshot(title: string, surface: string, answer: string, host: User) {
+    
     return {
       id: crypto.randomUUID(),
       title,

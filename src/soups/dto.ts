@@ -6,11 +6,11 @@ export class CreateSoupDto {
   title: string
 
   @IsString()
-  @Length(8, 2000)
+  @Length(8, 12000)
   surface: string
 
   @IsString()
-  @Length(8, 4000)
+  @Length(8, 20000)
   answer: string
 
   @IsOptional()
@@ -31,12 +31,12 @@ export class UpdateSoupDto {
 
   @IsOptional()
   @IsString()
-  @Length(8, 2000)
+  @Length(8, 12000)
   surface?: string
 
   @IsOptional()
   @IsString()
-  @Length(8, 4000)
+  @Length(8, 20000)
   answer?: string
 
   @IsOptional()
