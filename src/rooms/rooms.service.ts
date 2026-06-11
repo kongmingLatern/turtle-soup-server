@@ -25,6 +25,51 @@ if (!globalThis.crypto) {
   (globalThis as any).crypto = webcrypto;
 }
 
+type PublicUser = {
+  id: string
+  username: string
+  displayName: string
+  avatarDataUrl?: string
+  points: number
+  rankTitle: string
+}
+
+type PublicQuestion = {
+  id: string
+  text: string
+  verdict?: string | null
+  important: boolean
+  quality: QuestionQuality
+  truthGuess: TruthGuess
+  firstCoreClue: boolean
+  firstMainLogic: boolean
+  firstFullSolve: boolean
+  author: PublicUser
+  createdAt: Date
+  answeredAt?: Date | null
+}
+
+type RoomPayload = {
+  id: string
+  code: string
+  title: string
+  surface: string
+  answer: string
+  canvasDataUrl: string
+  ambience?: Room['ambience']
+  solved: boolean
+  revealed: boolean
+  settlement?: unknown | null
+  mvp?: Room['mvp']
+  soupHistory: NonNullable<Room['soupHistory']>
+  ratingMap: Record<string, number>
+  host: PublicUser
+  questions: PublicQuestion[]
+  avatarCache: Record<string, string>
+  createdAt: Date
+  updatedAt: Date
+}
+
 @Injectable()
 export class RoomsService {
   constructor(
@@ -54,13 +99,8 @@ export class RoomsService {
   }
 
   async findByCode(code: string) {
-    const room = await this.rooms.findOne({
-      where: { code },
-      relations: { questions: true },
-      order: { questions: { createdAt: 'DESC' } },
-    })
-    if (!room) throw new NotFoundException('房间不存在')
-    return this.normalizeRoom(room)
+    const room = await this.findEntityByCodeWithQuestions(code)
+    return this.serializeRoom(room)
   }
 
   async update(code: string, dto: UpdateRoomDto, user: User) {
@@ -161,11 +201,14 @@ export class RoomsService {
     const saved = await this.questions.save(this.questions.create({ text: dto.text, author: user, room }))
     const question = await this.questions.findOne({ where: { id: saved.id } })
     if (!question) throw new NotFoundException('问题不存在')
+    const avatarCache = this.createAvatarCache([question.author])
+    const payload = this.serializeQuestion(question, { includeAvatar: true })
     this.gateway.server.to(room.code).emit('question-added', {
       roomCode: room.code,
-      question,
+      question: payload,
+      avatarCache,
     })
-    return question
+    return payload
   }
 
   async updateQuestion(code: string, questionId: string, dto: UpdateQuestionDto, user: User) {
@@ -199,13 +242,18 @@ export class RoomsService {
       question.firstFullSolve = dto.firstFullSolve
     }
     await this.questions.save(question)
-    const next = await this.findByCode(code)
-    this.gateway.emitRoom(next)
-    return next
+    const savedQuestion = await this.questions.findOne({ where: { id: question.id } })
+    if (!savedQuestion) throw new NotFoundException('问题不存在')
+    const payload = this.serializeQuestion(savedQuestion, { includeAvatar: false })
+    this.gateway.server.to(room.code).emit('question-updated', {
+      roomCode: room.code,
+      question: payload,
+    })
+    return { question: payload }
   }
 
   async reveal(code: string, user: User) {
-    const room = await this.findByCode(code)
+    const room = await this.findEntityByCodeWithQuestions(code)
     this.assertHost(room, user)
     if (room.revealed && room.settlement) {
       return room.settlement
@@ -248,7 +296,7 @@ export class RoomsService {
   }
 
   async selectMvp(code: string, dto: SelectMvpDto, user: User) {
-    const room = await this.findByCode(code)
+    const room = await this.findEntityByCodeWithQuestions(code)
     this.assertHost(room, user)
     if (!room.revealed) throw new ForbiddenException('揭秘后才能评定 MVP')
     if (room.mvp) throw new ForbiddenException('本轮 MVP 已评定')
@@ -309,13 +357,25 @@ export class RoomsService {
     const room = await this.findEntityByCode(code)
     this.assertHost(room, user)
     await this.questions.delete({ id: questionId })
-    const next = await this.findByCode(code)
-    this.gateway.emitRoom(next)
-    return next
+    this.gateway.server.to(room.code).emit('question-removed', {
+      roomCode: room.code,
+      questionId,
+    })
+    return { questionId }
   }
 
   private async findEntityByCode(code: string) {
     const room = await this.rooms.findOne({ where: { code }, relations: { host: true } })
+    if (!room) throw new NotFoundException('房间不存在')
+    return room
+  }
+
+  private async findEntityByCodeWithQuestions(code: string) {
+    const room = await this.rooms.findOne({
+      where: { code },
+      relations: { host: true, questions: true },
+      order: { questions: { createdAt: 'DESC' } },
+    })
     if (!room) throw new NotFoundException('房间不存在')
     return room
   }
@@ -395,28 +455,84 @@ export class RoomsService {
     return crypto.randomUUID().slice(0, 8).toUpperCase()
   }
 
-  private normalizeRoom(room: Room) {
-    room.soupHistory = this.getRevealedSoupHistory(room.soupHistory ?? []).map((item) => ({
-        ...item,
-        host: item.host ?? {
-          id: room.host.id,
-          username: room.host.username,
-          displayName: room.host.displayName,
-          avatarDataUrl: room.host.avatarDataUrl ?? '',
-        },
-      }))
-    room.questions = [...(room.questions ?? [])].sort(
+  private serializeRoom(room: Room): RoomPayload {
+    const questions = [...(room.questions ?? [])].sort(
       (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
     )
-    room.questions.forEach((question) => {
-      question.important = Boolean(question.important)
-      question.quality = question.quality ?? QuestionQuality.None
-      question.truthGuess = question.truthGuess ?? TruthGuess.None
-      question.firstCoreClue = Boolean(question.firstCoreClue)
-      question.firstMainLogic = Boolean(question.firstMainLogic)
-      question.firstFullSolve = Boolean(question.firstFullSolve)
-    })
-    return room
+    const soupHistory = this.getRevealedSoupHistory(room.soupHistory ?? []).map((item) => ({
+      ...item,
+      host: item.host ?? {
+        id: room.host.id,
+        username: room.host.username,
+        displayName: room.host.displayName,
+        avatarDataUrl: room.host.avatarDataUrl ?? '',
+      },
+    }))
+    const avatarCache = this.createAvatarCache([
+      room.host,
+      ...questions.map((question) => question.author),
+    ])
+
+    return {
+      id: room.id,
+      code: room.code,
+      title: room.title,
+      surface: room.surface,
+      answer: room.answer,
+      canvasDataUrl: room.canvasDataUrl,
+      ambience: room.ambience ?? null,
+      solved: Boolean(room.solved),
+      revealed: Boolean(room.revealed),
+      settlement: room.settlement ?? null,
+      mvp: room.mvp ?? null,
+      soupHistory,
+      ratingMap: room.ratingMap ?? {},
+      host: this.serializeUser(room.host, { includeAvatar: true }),
+      questions: questions.map((question) =>
+        this.serializeQuestion(question, { includeAvatar: false }),
+      ),
+      avatarCache,
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt,
+    }
+  }
+
+  private serializeQuestion(
+    question: Question,
+    options: { includeAvatar: boolean },
+  ): PublicQuestion {
+    return {
+      id: question.id,
+      text: question.text,
+      verdict: question.verdict ?? null,
+      important: Boolean(question.important),
+      quality: question.quality ?? QuestionQuality.None,
+      truthGuess: question.truthGuess ?? TruthGuess.None,
+      firstCoreClue: Boolean(question.firstCoreClue),
+      firstMainLogic: Boolean(question.firstMainLogic),
+      firstFullSolve: Boolean(question.firstFullSolve),
+      author: this.serializeUser(question.author, options),
+      createdAt: question.createdAt,
+      answeredAt: question.answeredAt ?? null,
+    }
+  }
+
+  private serializeUser(user: User, options: { includeAvatar: boolean }): PublicUser {
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      ...(options.includeAvatar ? { avatarDataUrl: user.avatarDataUrl ?? '' } : {}),
+      points: user.points ?? 0,
+      rankTitle: user.rankTitle ?? '路人甲',
+    }
+  }
+
+  private createAvatarCache(users: Array<Pick<User, 'id' | 'avatarDataUrl'> | undefined>) {
+    return users.reduce<Record<string, string>>((cache, user) => {
+      if (user?.id && user.avatarDataUrl) cache[user.id] = user.avatarDataUrl
+      return cache
+    }, {})
   }
 
   private calculateSettlement(room: Room) {

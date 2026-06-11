@@ -116,7 +116,7 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     })
   }
 
-  emitRoom(room: Room) {
+  emitRoom(room: { code: Room['code'] }) {
     this.server.to(room.code).emit('room-updated', room)
   }
 
